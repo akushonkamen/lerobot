@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
+from huggingface_hub import snapshot_download
 
 from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
 from lerobot.lerobot_types import EnvTransition, RobotObservation, TransitionKey
@@ -51,6 +52,32 @@ if TYPE_CHECKING or _transformers_available:
 else:
     AutoProcessor = None
     AutoTokenizer = None
+
+
+def _auto_tokenizer_from_pretrained(tokenizer_name: str, **kwargs):
+    """
+    Load a tokenizer by name, tolerating tokenizer-only Hub caches in offline mode.
+
+    Since transformers 5.x, `AutoTokenizer.from_pretrained` resolves the model config
+    (`config.json`) before reading `tokenizer_config.json`. Repos that ship only
+    tokenizer files (e.g. `google/paligemma-3b-pt-224`) therefore fail to load in
+    offline mode even though every required tokenizer file is already in the local Hub
+    cache. When the first attempt raises an OS-level error (offline mode, cache miss,
+    unreachable Hub), retry once from the local snapshot resolved with
+    `snapshot_download(..., local_files_only=True)`, which never touches the network:
+    loading from a local directory no longer requires `config.json`.
+
+    If the repo is not fully cached locally, the original error is re-raised.
+    """
+    try:
+        return AutoTokenizer.from_pretrained(tokenizer_name, **kwargs)
+    except OSError as original_error:
+        try:
+            snapshot_path = snapshot_download(repo_id=tokenizer_name, local_files_only=True)
+        except Exception:
+            # Not fully cached locally; keep the original, more informative failure.
+            raise original_error from None
+        return AutoTokenizer.from_pretrained(snapshot_path, local_files_only=True, **kwargs)
 
 
 @dataclass
@@ -110,7 +137,7 @@ class TokenizerProcessorStep(ObservationProcessorStep):
         elif self.tokenizer_name is not None:
             if AutoTokenizer is None:
                 raise ImportError("AutoTokenizer is not available")
-            self.input_tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+            self.input_tokenizer = _auto_tokenizer_from_pretrained(self.tokenizer_name)
         else:
             raise ValueError(
                 "Either 'tokenizer' or 'tokenizer_name' must be provided. "
@@ -397,7 +424,7 @@ class ActionTokenizerProcessorStep(ActionProcessorStep):
                 "Pass a tokenizer object directly or a tokenizer name to auto-load."
             )
 
-        self._paligemma_tokenizer = AutoTokenizer.from_pretrained(
+        self._paligemma_tokenizer = _auto_tokenizer_from_pretrained(
             self.paligemma_tokenizer_name,
             trust_remote_code=self.trust_remote_code,
             add_eos_token=True,

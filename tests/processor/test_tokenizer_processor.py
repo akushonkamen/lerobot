@@ -1575,3 +1575,103 @@ def test_subtask_not_added_for_unsupported_types():
 
     # But main task tokens should still be present
     assert f"{OBS_LANGUAGE}.tokens" in observation
+
+
+# ---------------------------------------------------------------------------
+# Offline loading of tokenizer-only Hub caches (#4131)
+#
+# Since transformers 5.x, `AutoTokenizer.from_pretrained(repo_id)` resolves the
+# model config (`config.json`) before reading `tokenizer_config.json`. Repos
+# that ship only tokenizer files (e.g. `google/paligemma-3b-pt-224`) therefore
+# fail to load in offline mode even when every tokenizer file is already in the
+# local Hub cache. These tests pin the lerobot-side fallback: resolve the local
+# snapshot and load the tokenizer from that directory.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def offline_hub(tmp_path, monkeypatch):
+    """Force huggingface_hub offline mode with a dedicated empty cache directory."""
+    import huggingface_hub.constants as hub_constants
+
+    cache_dir = tmp_path / "hub"
+    cache_dir.mkdir()
+    monkeypatch.setattr(hub_constants, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(hub_constants, "HF_HUB_CACHE", str(cache_dir))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache_dir))
+    return cache_dir
+
+
+def _make_tokenizer_only_snapshot(cache_dir: Path, repo_id: str = "local-org/tiny-tok") -> str:
+    """Build a fake Hub cache entry holding a tokenizer-only snapshot (no config.json)."""
+    import json
+
+    import huggingface_hub._tree_cache as _tree_cache
+    from tokenizers import Tokenizer as TokenizerCore, models
+    from transformers import PreTrainedTokenizerFast
+
+    commit_sha = "abc123def4567890abcdef1234567890abcdef12"
+    org, name = repo_id.split("/")
+    repo_folder = cache_dir / f"models--{org}--{name}"
+    snapshot_dir = repo_folder / "snapshots" / commit_sha
+    snapshot_dir.mkdir(parents=True)
+    refs_folder = repo_folder / "refs"
+    refs_folder.mkdir(parents=True)
+    # huggingface_hub reads this file verbatim (no stripping), so no trailing newline.
+    (refs_folder / "main").write_text(commit_sha)
+
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=TokenizerCore(
+            models.WordLevel({"<pad>": 0, "<unk>": 1, "hello": 2, "world": 3}, unk_token="<unk>")
+        ),
+        unk_token="<unk>",
+        pad_token="<pad>",
+    )
+    # save_pretrained writes tokenizer_config.json/tokenizer.json only; never config.json.
+    tokenizer.save_pretrained(snapshot_dir)
+
+    files = {
+        path.name: {"size": path.stat().st_size, "blob_id": "0" * 40}
+        for path in sorted(snapshot_dir.iterdir())
+        if path.is_file()
+    }
+    trees_folder = repo_folder / "trees"
+    trees_folder.mkdir(parents=True)
+    format_version = getattr(_tree_cache, "TREE_CACHE_FORMAT_VERSION", 1)
+    (trees_folder / f"{commit_sha}.json").write_text(
+        json.dumps({"format_version": format_version, "files": files})
+    )
+    return repo_id
+
+
+@skip_if_package_missing("transformers")
+def test_tokenizer_processor_loads_from_offline_tokenizer_only_snapshot(offline_hub):
+    repo_id = _make_tokenizer_only_snapshot(offline_hub)
+
+    processor = TokenizerProcessorStep(tokenizer_name=repo_id, max_length=8)
+
+    tokenized = processor.input_tokenizer(
+        "hello world", max_length=8, truncation=True, padding="max_length", return_tensors="pt"
+    )
+    assert tokenized["input_ids"].shape == (1, 8)
+
+
+@skip_if_package_missing("transformers")
+def test_action_tokenizer_paligemma_loads_from_offline_tokenizer_only_snapshot(offline_hub):
+    repo_id = _make_tokenizer_only_snapshot(offline_hub)
+
+    step = ActionTokenizerProcessorStep(
+        action_tokenizer_input_object=MockTokenizer(),
+        paligemma_tokenizer_name=repo_id,
+    )
+
+    assert step._paligemma_tokenizer.vocab_size >= 4
+
+
+@skip_if_package_missing("transformers")
+def test_offline_uncached_tokenizer_name_still_raises_oserror(offline_hub):
+    # Nothing cached: the fallback must re-raise the original (informative) error.
+    with pytest.raises(OSError, match="huggingface.co|cached"):
+        TokenizerProcessorStep(tokenizer_name="local-org/never-cached", max_length=8)
