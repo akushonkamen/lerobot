@@ -1014,7 +1014,6 @@ class PI0Policy(PreTrainedPolicy):
         device = next(self.parameters()).device
 
         present_img_keys = [key for key in self.config.image_features if key in batch]
-        missing_img_keys = [key for key in self.config.image_features if key not in batch]
 
         if len(present_img_keys) == 0:
             raise ValueError(
@@ -1022,6 +1021,8 @@ class PI0Policy(PreTrainedPolicy):
                 f"(batch: {batch.keys()}) (image_features: {self.config.image_features})"
             )
 
+        images_by_key = {}
+        img_masks_by_key = {}
         for key in present_img_keys:
             img = batch[key]
 
@@ -1051,18 +1052,26 @@ class PI0Policy(PreTrainedPolicy):
             if is_channels_first:
                 img = img.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
 
-            images.append(img)
+            images_by_key[key] = img
             # Create mask (all ones for real images)
             bsize = img.shape[0]
             mask = torch.ones(bsize, dtype=torch.bool, device=device)
-            img_masks.append(mask)
+            img_masks_by_key[key] = mask
 
-        # Create image features not present in the batch as fully 0 padded images
-        for _num_empty_cameras in range(len(missing_img_keys)):
-            img = torch.ones_like(img) * -1  # padded with -1 for SigLIP
-            mask = torch.zeros_like(mask)  # mask is zero for empty cameras
-            images.append(img)
-            img_masks.append(mask)
+        # Assemble the slots in `image_features` order so each camera's image lands in
+        # its own slot even when another camera is missing from the batch. Missing
+        # cameras become fully padded slots (-1 image, zero mask) at their own position.
+        template_img = next(iter(images_by_key.values()))
+        template_mask = next(iter(img_masks_by_key.values()))
+        for key in self.config.image_features:
+            if key in images_by_key:
+                images.append(images_by_key[key])
+                img_masks.append(img_masks_by_key[key])
+            else:
+                img = torch.ones_like(template_img) * -1  # padded with -1 for SigLIP
+                mask = torch.zeros_like(template_mask)  # mask is zero for empty cameras
+                images.append(img)
+                img_masks.append(mask)
 
         return images, img_masks
 

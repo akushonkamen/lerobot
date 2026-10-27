@@ -389,13 +389,14 @@ class SmolVLAPolicy(PreTrainedPolicy):
         images = []
         img_masks = []
         present_img_keys = [key for key in self.config.image_features if key in batch]
-        missing_img_keys = [key for key in self.config.image_features if key not in batch]
 
         if len(present_img_keys) == 0:
             raise ValueError(
                 f"All image features are missing from the batch. At least one expected. (batch: {batch.keys()}) (image_features:{self.config.image_features})"
             )
         # Preprocess image features present in the batch
+        images_by_key = {}
+        img_masks_by_key = {}
         for key in present_img_keys:
             img = batch[key][:, -1, :, :, :] if batch[key].ndim == 5 else batch[key]
             if img.dtype == torch.uint8:
@@ -418,18 +419,26 @@ class SmolVLAPolicy(PreTrainedPolicy):
                 mask = batch[f"{key}_padding_mask"].bool()
             else:
                 mask = torch.ones(bsize, dtype=torch.bool, device=device)
-            images.append(img)
-            img_masks.append(mask)
+            images_by_key[key] = img
+            img_masks_by_key[key] = mask
 
-        # Create image features not present in the batch
-        # as fully 0 padded images.
-        for num_empty_cameras in range(len(missing_img_keys)):
-            if num_empty_cameras >= self.config.empty_cameras:
-                break
-            img = torch.ones_like(img) * -1
-            mask = torch.zeros_like(mask)
-            images.append(img)
-            img_masks.append(mask)
+        # Assemble the slots in `image_features` order so each camera's image lands in
+        # its own slot even when another camera is missing from the batch. Missing
+        # cameras become fully padded slots (-1 image, zero mask) at their own position,
+        # up to the checkpoint's `empty_cameras` limit.
+        template_img = next(iter(images_by_key.values()))
+        template_mask = next(iter(img_masks_by_key.values()))
+        num_empty_cameras = 0
+        for key in self.config.image_features:
+            if key in images_by_key:
+                images.append(images_by_key[key])
+                img_masks.append(img_masks_by_key[key])
+            elif num_empty_cameras < self.config.empty_cameras:
+                num_empty_cameras += 1
+                img = torch.ones_like(template_img) * -1
+                mask = torch.zeros_like(template_mask)
+                images.append(img)
+                img_masks.append(mask)
         return images, img_masks
 
     def _pi_aloha_decode_state(self, state):
