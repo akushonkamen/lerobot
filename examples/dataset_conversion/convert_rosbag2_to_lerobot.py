@@ -22,10 +22,12 @@ porting guide, leaving topic-to-feature mapping and the synchronized frame grid
 hand-written (and easy to get silently wrong). The three silent failure modes
 called out in the issue are addressed as follows:
 
-1. **Topic contract**: topics are mapped to features through an *explicit*
-   ``--state-topic`` / ``--action-topic`` CLI argument (no inference from
-   topic names), and joint names are validated for consistency across every
-   message of a bag.
+1. **Topic contract**: the source topic is selected through an *explicit*
+   ``--topic`` CLI argument (an fnmatch pattern; no inference from topic
+   names), and joint names are validated for consistency across every
+   message of a bag. Only the JointState contract is implemented; extending
+   to other message types (e.g. an explicit action topic or camera topics)
+   is left as a documented extension point, see ``read_jointstate_bags``.
 2. **Episode boundary timestamps**: one bag = one episode. Messages are resampled
    onto a fixed ``1 / fps`` grid built from each bag's first message log time, so
    timestamps restart at 0 at every episode boundary (a v3.0 requirement). Note
@@ -46,7 +48,7 @@ names taken from the first message of the bag.
 Usage (with a synthetic fixture, see ``--generate-fixture``):
 
     python examples/dataset_conversion/convert_rosbag2_to_lerobot.py \
-        --generate-fixture 2 /tmp/synth_bags
+        --generate-fixture 2 --root /tmp/synth_bags
     python examples/dataset_conversion/convert_rosbag2_to_lerobot.py \
         --input '/tmp/synth_bags/*.mcap' --repo-id local/rosbag2_demo \
         --root /tmp/out_ds --fps 30 --task "move the arm"
@@ -180,8 +182,9 @@ def resample_to_frame_grid(
     Action is the *forward-filled* value of the same source stream (the command
     that was in effect at ``t``), which is the correct default for teleop
     recordings where only a state stream exists — the executed action is the
-    state itself. Pass ``--action-topic`` to consume an explicit command topic
-    instead (see ``convert_bags`` for where to plug it in).
+    state itself. Consuming a separate, explicit action topic is not implemented
+    here; to add it, read a second JointState stream in ``read_jointstate_bags``
+    and forward-fill it onto the same grid in this function.
     """
     times = np.asarray(episode["log_times_s"])
     positions = np.asarray(episode["positions"], dtype=np.float32)
