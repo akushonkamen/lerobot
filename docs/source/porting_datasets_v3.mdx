@@ -295,6 +295,29 @@ dataset/
 
 This replaces the old episode-per-file structure with efficient, optimally-sized chunks.
 
+## Converting rosbag2/MCAP Recordings
+
+For ROS users with rosbag2 recordings (MCAP format), `examples/dataset_conversion/convert_rosbag2_to_lerobot.py`
+provides a reference conversion recipe for `sensor_msgs/msg/JointState` topics. It handles the parts that are
+easy to get silently wrong: explicit topic-to-feature mapping, resampling onto a fixed `1 / fps` frame grid
+with forward-filled actions, one bag per episode with per-episode re-zeroed timestamps, and statistics
+computed by the library itself so they match the v3.0 key set and artifact layout.
+
+```bash
+# Generate a synthetic 2-episode fixture to try it out
+python examples/dataset_conversion/convert_rosbag2_to_lerobot.py \
+    --generate-fixture 2 --root /tmp/synth_bags
+
+# Convert your bags (one file = one episode) and self-check the output
+python examples/dataset_conversion/convert_rosbag2_to_lerobot.py \
+    --input '/tmp/synth_bags/*.mcap' \
+    --repo-id your_id/rosbag2_dataset \
+    --root /tmp/out_ds --fps 30 --task "move the arm"
+```
+
+Requires `pip install mcap mcap-ros2-support`. See the script's module docstring for the full contract
+and for where to extend it with other message types (e.g. camera topics).
+
 ## Migrating from Dataset v2.1
 
 If you have existing datasets in v2.1 format, use the migration tool:
