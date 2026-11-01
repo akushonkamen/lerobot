@@ -29,6 +29,15 @@ Same-frame contrast (rules out duplicated columns): `max|state[t]-action[t]| = 0
 > one-frame leakage of the command history. A re-export fixing the recording script's
 > state write path is needed.
 
+## AI assistance disclosure
+
+Per [AI_POLICY.md](../../AI_POLICY.md), we disclose that this investigation and the
+verification script / dataset-card note here were prepared with significant assistance
+from an AI coding agent, reviewed by the human contributor
+(@akushonkamen, who ran the reproduction and reviewed every file). This disclosure is
+also in the issue comment and must be carried into the PR description when the
+Hub-side dataset-card PR is opened.
+
 ## Status
 
 - Code-side fix: none applicable — this is dataset content, not lerobot code.

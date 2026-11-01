@@ -1,3 +1,10 @@
+"""Verify the FineART one-frame state/action lag reported in huggingface/lerobot#5184.
+
+Checks that ``observation.state[t]`` equals ``action[t-1]`` exactly (all 14 dims) within
+each episode of a FineART parquet file, which indicates the state and action streams are
+not independent measurements.
+"""
+
 # Verification for huggingface/lerobot#5184 (lerobot/FineART dataset, revision 135d9b0)
 #
 # Checks whether observation.state[t] equals action[t-1] exactly per episode.
@@ -15,6 +22,7 @@ import pandas as pd
 
 
 def main(path: str) -> int:
+    """Check each episode for the state[t] == action[t-1] lag; exit 0 if confirmed."""
     df = pd.read_parquet(path, columns=["episode_index", "observation.state", "action"])
     s = np.stack(df["observation.state"].values)
     a = np.stack(df["action"].values)
