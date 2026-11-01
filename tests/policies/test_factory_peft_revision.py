@@ -190,3 +190,35 @@ def test_make_policy_loads_resume_weights_and_keeps_the_parent(monkeypatch):
     assert [str(path) for path in seen_while_building] == ["run/checkpoints/000002/pretrained_model"]
     assert cfg.pretrained_path == "user/base-policy"
     assert policy.config.pretrained_path == "user/base-policy"
+
+
+@pytest.mark.parametrize("failure_stage", ["features", "weights", "deferred_init"])
+def test_make_policy_restores_parent_path_after_failed_resume(monkeypatch, failure_stage):
+    cfg = SimpleNamespace(
+        type="mock",
+        device="cpu",
+        pretrained_path="user/base-policy",
+        pretrained_revision=None,
+        use_peft=False,
+        input_features={},
+        output_features={},
+    )
+    failure = RuntimeError("resume failed")
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    policy_cls = fail if failure_stage == "deferred_init" else SimpleNamespace(from_pretrained=fail)
+    monkeypatch.setattr(policy_factory, "get_policy_class", lambda _: policy_cls)
+    monkeypatch.setattr(
+        policy_factory, "dataset_to_policy_features", fail if failure_stage == "features" else lambda _: {}
+    )
+    with pytest.raises(RuntimeError) as caught:
+        policy_factory.make_policy(
+            cfg,
+            ds_meta=SimpleNamespace(features={}, stats={}),
+            pretrained_path="run/checkpoints/000002/pretrained_model",
+            defer_weight_load=failure_stage == "deferred_init",
+        )
+    assert caught.value is failure
+    assert cfg.pretrained_path == "user/base-policy"
